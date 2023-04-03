@@ -1,4 +1,6 @@
 # Changelog
+## Drupal adjustments: Remove upload functionality
+
 ## [3.0.8] - 2021-05-03
 ### Fixed
 - Fix user-agent in vimeo.php

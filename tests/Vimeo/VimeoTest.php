@@ -185,34 +185,6 @@ class VimeoTest extends TestCase
     /**
      * @expectedException Vimeo\Exceptions\VimeoUploadException
      */
-    public function testUploadWithNonExistedFile(): void
-    {
-        $this->markTestSkipped('Skipping until we have time to set up real tests with Travis secret storage.');
-
-        // Arrange
-        $vimeo = new Vimeo($this->clientId, $this->clientSecret);
-
-        // Act
-        $result = $vimeo->upload('./the_file_is_invalid');
-    }
-
-    /**
-     * @expectedException Vimeo\Exceptions\VimeoUploadException
-     */
-    public function testUploadWithInvalidParamShouldReturnVimeoRequestException(): void
-    {
-        $this->markTestSkipped('Skipping until we have time to set up real tests with Travis secret storage.');
-
-        // Arrange
-        $vimeo = new Vimeo($this->clientId, $this->clientSecret);
-
-        // Act
-        $result = $vimeo->upload(__DIR__.'/../../composer.json', array('invalid_param'));
-    }
-
-    /**
-     * @expectedException Vimeo\Exceptions\VimeoUploadException
-     */
     public function testReplaceWithNonExistedFile(): void
     {
         $this->markTestSkipped('Skipping until we have time to set up real tests with Travis secret storage.');

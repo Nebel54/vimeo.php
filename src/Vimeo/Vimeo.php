@@ -5,7 +5,6 @@ use Carbon\Carbon;
 use Vimeo\Exceptions\VimeoException;
 use Vimeo\Exceptions\VimeoRequestException;
 use Vimeo\Exceptions\VimeoUploadException;
-use Vimeo\Upload\TusClientFactory;
 
 /**
  *   Copyright 2013 Vimeo
@@ -52,18 +51,14 @@ class Vimeo
     /** @var null|string */
     private $_access_token = null;
 
-    /** @var TusClientFactory */
-    private $_tus_client_factory = null;
-
     /**
      * Creates the Vimeo library, and tracks the client and token information.
      *
      * @param string $client_id Your applications client id. Can be found on developer.vimeo.com/apps
      * @param string $client_secret Your applications client secret. Can be found on developer.vimeo.com/apps
      * @param string|null $access_token Your access token. Can be found on developer.vimeo.com/apps or generated using OAuth 2.
-     * @param TusClientFactory|null $tus_client_interface Your tus client that will be used.
      */
-    public function __construct(string $client_id, string $client_secret, string $access_token = null, TusClientFactory $tus_client_factory = null)
+    public function __construct(string $client_id, string $client_secret, string $access_token = null)
     {
         $this->_client_id = $client_id;
         $this->_client_secret = $client_secret;
@@ -76,7 +71,6 @@ class Vimeo
             //Certificate must indicate that the server is the server to which you meant to connect.
             CURLOPT_SSL_VERIFYHOST => 2,
         );
-        $this->_tus_client_factory = $tus_client_factory ?? new TusClientFactory();
     }
 
     /**
@@ -306,83 +300,6 @@ class Vimeo
     }
 
     /**
-     * Upload a file.
-     *
-     * This should be used to upload a local file. If you want a form for your site to upload direct to Vimeo, you
-     * should look at the `POST /me/videos` endpoint.
-     *
-     * @link https://developer.vimeo.com/api/endpoints/videos#POST/users/{user_id}/videos
-     * @param string $file_path Path to the video file to upload.
-     * @param array $params Parameters to send when creating a new video (name, privacy restrictions, etc.).
-     * @return string Video URI
-     * @throws VimeoRequestException
-     * @throws VimeoUploadException
-     */
-    public function upload($file_path, array $params = array())
-    {
-        // Validate that our file is real.
-        if (!is_file($file_path)) {
-            throw new VimeoUploadException('Unable to locate file to upload.');
-        }
-
-        $file_size = filesize($file_path);
-
-        // Ignore any specified upload approach and size.
-        $params['upload']['approach'] = 'tus';
-        $params['upload']['size'] = $file_size;
-
-        // Use JSON filtering so we only receive the data that we need to make an upload happen.
-        $uri = '/me/videos?fields=uri,upload';
-
-        $attempt = $this->request($uri, $params, 'POST');
-        if ($attempt['status'] !== 200) {
-            $attempt_error = !empty($attempt['body']['error']) ? ' [' . $attempt['body']['error'] . ']' : '';
-            throw new VimeoUploadException('Unable to initiate an upload.' . $attempt_error);
-        }
-
-        return $this->perform_upload_tus($file_path, $file_size, $attempt);
-    }
-
-    /**
-     * Replace the source of a single Vimeo video.
-     *
-     * @link https://developer.vimeo.com/api/endpoints/videos#POST/videos/{video_id}/versions
-     * @param string $video_uri Video uri of the video file to replace.
-     * @param string $file_path Path to the video file to upload.
-     * @return string Video URI
-     * @throws VimeoRequestException
-     * @throws VimeoUploadException
-     */
-    public function replace($video_uri, $file_path, array $params = array())
-    {
-        //  Validate that our file is real.
-        if (!is_file($file_path)) {
-            throw new VimeoUploadException('Unable to locate file to upload.');
-        }
-
-        $file_size = filesize($file_path);
-
-        // Use JSON filtering so we only receive the data that we need to make an upload happen.
-        $uri = $video_uri . self::VERSIONS_ENDPOINT . '?fields=upload';
-
-        // Ignore any specified upload approach and size.
-        $params['file_name'] = basename($file_path);
-        $params['upload']['approach'] = 'tus';
-        $params['upload']['size'] = $file_size;
-
-        $attempt = $this->request($uri, $params, 'POST');
-        if ($attempt['status'] !== 201) {
-            $attempt_error = !empty($attempt['body']['error']) ? ' [' . $attempt['body']['error'] . ']' : '';
-            throw new VimeoUploadException('Unable to initiate an upload.' . $attempt_error);
-        }
-
-        // `uri` doesn't come back from `/videos/:id/versions` so we need to manually set it here for uploading.
-        $attempt['body']['uri'] = $video_uri;
-
-        return $this->perform_upload_tus($file_path, $file_size, $attempt);
-    }
-
-    /**
      * Uploads an image to an individual picture response.
      *
      * @link https://developer.vimeo.com/api/upload/pictures
@@ -569,78 +486,4 @@ class Vimeo
         return base64_encode($this->_client_id . ':' . $this->_client_secret);
     }
 
-    /**
-     * Take an upload attempt and perform the actual upload via tus.
-     *
-     * @link https://tus.io/
-     * @param string $file_path Path to the video file to upload.
-     * @param int|float $file_size Size of the video file.
-     * @param array $attempt Upload attempt data.
-     * @return string
-     * @throws VimeoUploadException
-     */
-    private function perform_upload_tus(string $file_path, $file_size, array $attempt): string
-    {
-        $default_chunk_size = (100 * 1024 * 1024); // 100 MB
-
-        $url = $attempt['body']['upload']['upload_link'];
-        $url_path = parse_url($url)['path'];
-
-        $base_url = str_replace($url_path, '', $url);
-        $api_path = $url_path;
-        $api_pathp = explode('/', $api_path);
-        $key = $api_pathp[count($api_pathp) - 1];
-        $api_path = str_replace('/' . $key, '', $api_path);
-
-        $bytes_uploaded = 0;
-        $failures = 0;
-        $chunk_size = $this->getTusUploadChunkSize($default_chunk_size, (int)$file_size);
-
-        $client = $this->_tus_client_factory->getTusClient($base_url, $url);
-        $client->setApiPath($api_path);
-        $client->setKey($key)->file($file_path);
-        $client->getCache()->set($client->getKey(),[
-            'location' => $url,
-            'expires_at' => Carbon::now()->addSeconds($client->getCache()->getTtl())->format($client->getCache()::RFC_7231),
-        ]);
-
-        do {
-            try {
-                $bytes_uploaded = $client->upload($chunk_size);
-            } catch (\Exception $e) {
-                // We likely experienced a timeout, but if we experience three in a row, then we should back off and
-                // fail so as to not overwhelm servers that are, probably, down.
-                if ($failures >= 3) {
-                    throw new VimeoUploadException($e->getMessage());
-                }
-
-                $failures++;
-                sleep((int)pow(4, $failures)); // sleep 4, 16, 64 seconds (based on failure count)
-            }
-        } while ($bytes_uploaded < $file_size);
-
-        return $attempt['body']['uri'];
-    }
-
-    /**
-     * Enforces the notion that a user may supply any `proposed_chunk_size`, as long as it results in 1024 or less
-     * proposed chunks. In the event it does not, then the chunk size becomes the file size divided by 1024.
-     *
-     * @param int $proposed_chunk_size
-     * @param int $file_size
-     * @return int
-     */
-    private function getTusUploadChunkSize(int $proposed_chunk_size, int $file_size): int
-    {
-        $proposed_chunk_size = ($proposed_chunk_size <= 0) ? 1 : $proposed_chunk_size;
-        $chunks = floor($file_size / $proposed_chunk_size);
-        $divides_evenly = $file_size % $proposed_chunk_size === 0;
-        $number_of_chunks_proposed = ($divides_evenly) ? $chunks : $chunks + 1;
-
-        if ($number_of_chunks_proposed > 1024) {
-            return (int)floor($file_size / 1024) + 1;
-        }
-
-        return $proposed_chunk_size;
-    }
 }
